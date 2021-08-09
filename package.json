@@ -1,0 +1,17 @@
+{
+  "name": "stacksmate",
+  "version": "1.0.0",
+  "description": "Stacks Mate helps users benefit from the Stacks netword - NFTs on Bitcoin",
+  "author": "Mike Cohen <mike@risidio.com>",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@stacks/network": "^2.0.0-beta.0",
+    "@stacks/transactions": "^2.0.0-beta.1",
+    "axios": "^0.21.1",
+    "bn.js": "^5.2.0",
+    "express": "^4.16.1"
+  }
+}
