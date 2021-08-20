@@ -5,5 +5,5 @@
 Convert fiat, ether, bitcoin etc to stacks.
 
 ```bash
-curl -i localhost:8108/stxswap/ST3QSAJQ4EA8WXEDSRRKMZZ29NH91VZ6C5WJ086ZK/3000
+curl -i localhost:8108/stacksmate/ST3QSAJQ4EA8WXEDSRRKMZZ29NH91VZ6C5WJ086ZK/3000
 ```

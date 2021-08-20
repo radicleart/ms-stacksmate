@@ -6,7 +6,8 @@ const {
   StacksMainnet
 } = require('@stacks/network');
 const {
-    makeSTXTokenTransfer
+  getNonce,
+  makeSTXTokenTransfer
 } = require('@stacks/transactions');
 const express = require('express');
 
@@ -20,52 +21,109 @@ const RISIDIO_API = process.env.RISIDIO_API;
 
 const networkToUse = (NETWORK === 'mainnet') ? new StacksMainnet() : new StacksTestnet()
 
-const makeStacksTransfer = function (recipient, microstx) {
+const broadcast = function (transaction, recipient, microstx) {
   return new Promise((resolve, reject) => {
-    const amountBN = new BigNum(microstx)
-    const senderKey = PRIKEY
-    const txOptions = {
-      recipient: recipient,
-      amount: amountBN,
-      senderKey: senderKey,
-      network: networkToUse,
-      memo: 'Stacks Mate STX Swap.'
+    console.log(`transaction: ${transaction}\n`);
+    const txdata = new Uint8Array(transaction.serialize())
+    const headers = {
+      'Content-Type': 'application/octet-stream'
     }
-    makeSTXTokenTransfer(txOptions).then((transaction) => {
-      const txdata = new Uint8Array(transaction.serialize())
-      const headers = {
-        'Content-Type': 'application/octet-stream'
-      }
-      axios.post(RISIDIO_API + '/mesh/v2/broadcast', txdata, { headers: headers }).then(response => {
-        console.log('Successfully sent transaction from: ' + PUBKEY);
-        console.log('Amount (micro stx): ' + microstx);
-        console.log('To: ' + recipient);
-        resolve(response.data)
-      }).catch((error) => {
-        console.log('Failed to send transaction from: ' + PUBKEY, error);
-        console.log('Amount (micro stx): ' + microstx);
-        console.log('To: ' + recipient);
-        reject(error)
-      })
+    axios.post(RISIDIO_API + '/mesh/v2/broadcast', txdata, { headers: headers }).then(response => {
+      console.log('Successfully sent transaction from: ' + PUBKEY);
+      console.log('Amount (micro stx): ' + microstx);
+      console.log('To: ' + recipient);
+      resolve(response.data)
     }).catch((error) => {
-      console.log('Failed to send transaction from: ' + PUBKEY, error);
+      console.log('Failed to post to mesh for broadcast');
       reject(error)
     })
   })
 }
 
+const fetchNonce = function () {
+  return new Promise((resolve, reject) => {
+    getNonce(PUBKEY, networkToUse).then((txNonce) => {
+      console.log('Nonce: ' + txNonce + ' for pubkey ' + PUBKEY);
+      resolve(txNonce)
+    }).catch((error) => {
+      console.log('Failed to fetch nonce');
+      reject(error)
+    })
+  })
+}
+
+const makeStacksTransfer = function (recipient, microstx, txNonce) {
+  return new Promise((resolve, reject) => {
+    const amountBN = new BigNum(microstx)
+    console.log(`microstx: ${microstx}\n`);
+    console.log(`recipient: ${recipient}\n`);
+    const txOptions = {
+      recipient: recipient,
+      amount: amountBN,
+      senderKey: PRIKEY,
+      network: networkToUse,
+      memo: 'Stacks Mate STX Swap.'
+    }
+    if (txNonce) {
+      console.log(`txNonce: ${txNonce}\n`);
+      const nonce = new BigNum(txNonce)
+      txOptions.nonce = nonce
+    }
+    makeSTXTokenTransfer(txOptions).then((transaction) => {
+      broadcast(transaction, recipient, microstx).then((resp) => {
+        console.log('Tx broadcast');
+        resolve(resp)
+      }).catch((error) => {
+        console.log('Failed to broadcast transaction from: ' + PUBKEY);
+        reject(error)
+      })
+    }).catch((error) => {
+      console.log('Failed to make transaction from: ' + PUBKEY);
+      reject(error)
+    })
+  })
+}
+
+function runAsyncWrapper (callback) {
+  return function (req, res, next) {
+    callback(req, res, next).catch((err => {
+      if (typeof err === 'object' && err !== null) {
+        console.log(Object.keys(err));
+        if (err.response) {
+          console.log(err.response.data);
+          res.status(500).send(err.response.data);
+        } else {
+          console.log(err);
+          res.status(500).send(err);
+        }
+      } else {
+        console.log('error not object');
+        res.status(500).send(err.response.data.message);
+      }
+      console.log('-----------------------------------------------------------------');
+    }))
+  }
+}
+
 // App
 const app = express();
 app.get('/', (req, res) => {
-  res.send('Hello World');
+  res.send('hi there...');
 });
-app.get('/stxswap/:recipient/:microstx', (req, res) => {
-  makeStacksTransfer(req.params.recipient, req.params.microstx).then((resp) => {
-    res.send(resp);
-  }).catch((err) => {
-    res.sendStatus(500);
-  })
-});
+
+app.post('/stacksmate/:recipient/:microstx', runAsyncWrapper(async(req, res) => {
+  const transfer = await makeStacksTransfer(req.params.recipient, req.params.microstx)
+  res.send(transfer);
+}))
+
+app.post('/stacksmate/:recipient/:nonce/:microstx', runAsyncWrapper(async(req, res) => {
+  let txNonce = req.params.nonce
+  if (txNonce < 0) {
+    txNonce = await fetchNonce()
+  }
+  const transfer = await makeStacksTransfer(req.params.recipient, req.params.microstx, txNonce)
+  res.send(transfer);
+}))
 
 app.listen(PORT, HOST);
 console.log(`Running with ${RISIDIO_API}\n`);
