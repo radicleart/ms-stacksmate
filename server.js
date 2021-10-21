@@ -1,25 +1,74 @@
 'use strict';
 const BigNum = require('bn.js');
 const axios = require('axios');
+// const utils = require('./utils.js');
 const {
   StacksTestnet,
   StacksMainnet
 } = require('@stacks/network');
 const {
   getNonce,
-  makeSTXTokenTransfer
+  makeSTXTokenTransfer,
+  intToHexString, leftPadHexToLength
 } = require('@stacks/transactions');
 const express = require('express');
+const crypto = require('crypto');
+const EC = require('elliptic').ec;
+const shajs = require('sha.js')
+
+var ec = new EC('secp256k1');
 
 // Constants
 const PORT = 8080
 const HOST = '0.0.0.0';
 const PUBKEY = process.env.STACKS_PUBKEY;
 const PRIKEY = process.env.STACKS_PRIKEY;
+const SIGNER_PUBKEY = process.env.STACKS_SIGNER_PUBKEY;
+const SIGNER_PRIKEY = process.env.STACKS_SIGNER_PRIKEY;
 const NETWORK = process.env.STACKS_NETWORK;
 const RISIDIO_API = process.env.RISIDIO_API;
 
 const networkToUse = (NETWORK === 'mainnet') ? new StacksMainnet() : new StacksTestnet()
+
+const mysha256 = function (message) {
+  let encoded
+  if (typeof message === 'string') {
+    encoded = new TextEncoder().encode(message)
+  } else if (typeof message === 'number') {
+    // const buf = Buffer.alloc(8)
+    // buf.writeUInt8(message, 0)
+    // encoded = new Uint8Array(buf)
+    const buf = Buffer.alloc(16)
+    buf.writeUIntLE(message, 0, 6)
+    encoded = Uint8Array.from(buf)
+  } else {
+    // encoded = new Uint8Array(message)
+    encoded = Uint8Array.from(message)
+  }
+  // eslint-disable-next-line new-cap
+  // const hashFunction = new sha256()
+  return shajs('sha256').update(encoded).digest('hex')
+  // return hashFunction.update(encoded).digest()
+  // return hashSha256(encoded)
+}
+const signPayloadEC = function (message, privateKey) {
+  const hash = mysha256(message)
+  const ecPrivate = ec.keyFromPrivate(privateKey)
+  const signature = ecPrivate.sign(hash)
+  const coordinateValueBytes = 32
+  const r = leftPadHexToLength(signature.r.toString('hex'), coordinateValueBytes * 2)
+  const s = leftPadHexToLength(signature.s.toString('hex'), coordinateValueBytes * 2)
+  if (signature.recoveryParam === undefined || signature.recoveryParam === null) {
+    throw new Error('"signature.recoveryParam" is not set')
+  }
+  const recoveryParam = intToHexString(signature.recoveryParam, 1)
+  console.log('signature.recoveryParam', signature.recoveryParam)
+  const recoverableSignatureString = r + s + recoveryParam
+  // const combined = r + s
+  // return Buffer.from(combined, 'hex')
+  // return (Buffer.from(recoverableSignatureString, 'hex'))
+  return recoverableSignatureString
+}
 
 const broadcast = function (transaction, recipient, microstx) {
   return new Promise((resolve, reject) => {
@@ -111,6 +160,12 @@ app.get('/', (req, res) => {
   res.send('hi there...');
 });
 
+app.get('/stacksmate/signme/:assetHash', (req, res) => {
+  console.log(`signme: ` + SIGNER_PRIKEY, req.params);
+  const sig = signPayloadEC(req.params.assetHash, SIGNER_PRIKEY)
+  res.send(sig);
+});
+
 app.post('/stacksmate/:recipient/:microstx', runAsyncWrapper(async(req, res) => {
   const transfer = await makeStacksTransfer(req.params.recipient, req.params.microstx)
   res.send(transfer);
@@ -128,5 +183,4 @@ app.post('/stacksmate/:recipient/:nonce/:microstx', runAsyncWrapper(async(req, r
 app.listen(PORT, HOST);
 console.log(`Running with ${RISIDIO_API}\n`);
 console.log(`Running with ${PUBKEY}\n`);
-console.log(`Running with ${PRIKEY}\n`);
 console.log(`Running on http://${HOST}:${PORT}\n\n`);
