@@ -27,6 +27,7 @@ const SIGNER_PUBKEY = process.env.STACKS_SIGNER_PUBKEY;
 const SIGNER_PRIKEY = process.env.STACKS_SIGNER_PRIKEY;
 const NETWORK = process.env.STACKS_NETWORK;
 const RISIDIO_API = process.env.RISIDIO_API;
+const ALLOWED_IP = process.env.STACKS_ALLOWED_IP;
 
 const networkToUse = (NETWORK === 'mainnet') ? new StacksMainnet() : new StacksTestnet()
 
@@ -161,9 +162,14 @@ app.get('/', (req, res) => {
 });
 
 app.get('/stacksmate/signme/:assetHash', (req, res) => {
-  console.log(`signme: ` + SIGNER_PRIKEY, req.params);
-  const sig = signPayloadEC(req.params.assetHash, SIGNER_PRIKEY)
-  res.send(sig);
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  console.log(ip); // ip address of the user
+  if (ALLOWED_IP.indexOf(ip) > -1) {
+    const sig = signPayloadEC(req.params.assetHash, SIGNER_PRIKEY)
+    res.send(sig);
+  } else {
+    res.sendStatus(401);
+  }
 });
 
 app.post('/stacksmate/:recipient/:microstx', runAsyncWrapper(async(req, res) => {
@@ -181,6 +187,9 @@ app.post('/stacksmate/:recipient/:nonce/:microstx', runAsyncWrapper(async(req, r
 }))
 
 app.listen(PORT, HOST);
+console.log(`Running with ${ALLOWED_IP}\n`);
 console.log(`Running with ${RISIDIO_API}\n`);
 console.log(`Running with ${PUBKEY}\n`);
+console.log(`Running with ${SIGNER_PUBKEY}\n`);
+// console.log(`Running with ${SIGNER_PRIKEY}.substring(0,6)\n`);
 console.log(`Running on http://${HOST}:${PORT}\n\n`);
