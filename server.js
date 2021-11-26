@@ -164,7 +164,7 @@ app.get('/', (req, res) => {
 app.get('/stacksmate/signme/:assetHash', (req, res) => {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   console.log(ip); // ip address of the user
-  if (ALLOWED_IP.indexOf(ip) > -1) {
+  if (ip.indexOf(ALLOWED_IP) > -1) {
     const sig = signPayloadEC(req.params.assetHash, SIGNER_PRIKEY)
     res.send(sig);
   } else {
