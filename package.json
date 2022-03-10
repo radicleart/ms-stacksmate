@@ -9,9 +9,10 @@
     "test": "mocha index.test.js"
   },
   "dependencies": {
-    "@stacks/encryption": "^2.0.1",
-    "@stacks/network": "^2.0.0-beta.0",
-    "@stacks/transactions": "^2.0.0-beta.1",
+    "@stacks/bns": "^3.3.0",
+    "@stacks/encryption": "^3.3.0",
+    "@stacks/network": "^3.3.0",
+    "@stacks/transactions": "^3.3.0",
     "axios": "^0.21.1",
     "bn.js": "^5.2.0",
     "chai": "^4.3.4",

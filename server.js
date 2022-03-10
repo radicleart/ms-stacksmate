@@ -7,9 +7,15 @@ const {
   StacksMainnet
 } = require('@stacks/network');
 const {
+  uintCV,
+  standardPrincipalCV,
   getNonce,
   makeSTXTokenTransfer,
-  intToHexString, leftPadHexToLength
+  intToHexString,
+  leftPadHexToLength,
+  NonFungibleConditionCode,
+  createAssetInfo,
+  makeStandardNonFungiblePostCondition
 } = require('@stacks/transactions');
 const express = require('express');
 const crypto = require('crypto');
@@ -102,7 +108,46 @@ const fetchNonce = function () {
     })
   })
 }
+const checkOpenNodeApiKey = function (charge) {
+  const received = charge.hashed_order;
+  const calculated = crypto.createHmac('sha256', OPENNODE_API_KEY_SM).update(charge.id).digest('hex');
+  return (received === calculated)
+}
 
+const transferNFT = function (data) {
+  console.log('transfer nft: data=', data);
+  if (!checkOpenNodeApiKey(data)) throw new Error('Not called via open node!')
+  const nonFungibleAssetInfo = createAssetInfo(
+    data.contractAddress,
+    data.contractName,
+    (data.assetName) ? data.assetName : data.contractName.split('-')[0]
+  )
+  // Post-condition check failure on non-fungible asset ST1ESYCGJB5Z5NBHS39XPC70PGC14WAQK5XXNQYDW.thisisnumberone-v1::my-nft owned by STFJEDEQB1Y1CQ7F04CS62DCS5MXZVSNXXN413ZG: UInt(3) Sent
+  const standardNonFungiblePostCondition = makeStandardNonFungiblePostCondition(
+    data.owner, // postConditionAddress
+    NonFungibleConditionCode.DoesNotOwn,
+    nonFungibleAssetInfo, // contract and nft info
+    uintCV(data.nftIndex)
+  )
+  const txOptions = {
+    contractAddress: data.contractAddress,
+    contractName: data.contractName,
+    functionName: 'transfer',
+    functionArgs: [uintCV(data.nftIndex), standardPrincipalCV(data.owner), standardPrincipalCV(data.recipient)],
+    senderKey: PRIKEY,
+    network: networkToUse,
+    postConditions: [standardNonFungiblePostCondition],
+  };
+  makeContractCall(txOptions).then((transaction) => {
+    broadcast(transaction, data.owner, data.nftIndex).then((resp) => {
+      console.log('transferNFT: Tx broadcast');
+      resolve(resp)
+    }).catch((error) => {
+      console.log('Failed to broadcast transaction from: ' + PUBKEY);
+      reject(error)
+    })
+  })
+}
 const makeStacksTransfer = function (recipient, microstx, txNonce) {
   return new Promise((resolve, reject) => {
     const amountBN = new BigNum(microstx)
@@ -172,6 +217,11 @@ app.get('/stacksmate/signme/:assetHash', (req, res) => {
     res.sendStatus(401);
   }
 });
+
+app.post('/stacksmate/transfer-nft', runAsyncWrapper(async(req, res) => {
+  const transfer = await transferNFT(req.body)
+  res.send(transfer);
+}))
 
 app.post('/stacksmate/:tokenId/:sender/:recipient', runAsyncWrapper(async(req, res) => {
   const transfer = await makeStacksTransfer(req.params.recipient, req.params.microstx)
