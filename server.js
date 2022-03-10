@@ -23,6 +23,7 @@ const PORT = 8080
 const HOST = '0.0.0.0';
 const PUBKEY = process.env.STACKS_PUBKEY;
 const PRIKEY = process.env.STACKS_PRIKEY;
+const OPENNODE_API_KEY_SM = process.env.OPENNODE_API_KEY_SM;
 const SIGNER_PUBKEY = process.env.STACKS_SIGNER_PUBKEY;
 const SIGNER_PRIKEY = process.env.STACKS_SIGNER_PRIKEY;
 const NETWORK = process.env.STACKS_NETWORK;
@@ -172,6 +173,11 @@ app.get('/stacksmate/signme/:assetHash', (req, res) => {
   }
 });
 
+app.post('/stacksmate/:tokenId/:sender/:recipient', runAsyncWrapper(async(req, res) => {
+  const transfer = await makeStacksTransfer(req.params.recipient, req.params.microstx)
+  res.send(transfer);
+}))
+
 app.post('/stacksmate/:recipient/:microstx', runAsyncWrapper(async(req, res) => {
   const transfer = await makeStacksTransfer(req.params.recipient, req.params.microstx)
   res.send(transfer);
@@ -191,5 +197,6 @@ console.log(`Running with ${ALLOWED_IP}\n`);
 console.log(`Running with ${RISIDIO_API}\n`);
 console.log(`Running with ${PUBKEY}\n`);
 console.log(`Running with ${SIGNER_PUBKEY}\n`);
+console.log(`Running with ${OPENNODE_API_KEY_SM}\n`);
 // console.log(`Running with ${SIGNER_PRIKEY}.substring(0,6)\n`);
 console.log(`Running on http://${HOST}:${PORT}\n\n`);
