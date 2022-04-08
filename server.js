@@ -1,7 +1,7 @@
 'use strict';
 const BigNum = require('bn.js');
 const axios = require('axios');
-// const utils = require('./utils.js');
+
 const {
   StacksTestnet,
   StacksMainnet
@@ -9,18 +9,26 @@ const {
 const {
   uintCV,
   standardPrincipalCV,
+  contractPrincipalCV,
   getNonce,
   makeSTXTokenTransfer,
   intToHexString,
   leftPadHexToLength,
+  PostConditionMode,
+  FungibleConditionCode,
   NonFungibleConditionCode,
+  makeContractCall,
   createAssetInfo,
+  broadcastTransaction,
+  makeStandardSTXPostCondition,
+  makeStandardFungiblePostCondition,
   makeStandardNonFungiblePostCondition
 } = require('@stacks/transactions');
 const express = require('express');
 const crypto = require('crypto');
 const EC = require('elliptic').ec;
-const shajs = require('sha.js')
+const shajs = require('sha.js');
+const { resolve } = require('path');
 
 var ec = new EC('secp256k1');
 
@@ -37,6 +45,21 @@ const RISIDIO_API = process.env.RISIDIO_API;
 const ALLOWED_IP = process.env.STACKS_ALLOWED_IP;
 
 const networkToUse = (NETWORK === 'mainnet') ? new StacksMainnet() : new StacksTestnet()
+
+const toOnChainAmount = function (amount, gftPrecision) {
+  try {
+    if (!gftPrecision) {
+      amount = amount * precision
+      return Math.round(amount * precision) / precision
+    } else {
+      const newPrec = Math.pow(10, gftPrecision)
+      amount = amount * newPrec
+      return Math.round(amount * newPrec) / newPrec
+    }
+  } catch {
+    return 0
+  }
+}
 
 const mysha256 = function (message) {
   let encoded
@@ -96,11 +119,11 @@ const broadcast = function (transaction, recipient, microstx) {
     })
   })
 }
-const getSTXMintPostConds = function (rootGetters, data) {
+const getSTXMintPostConds = function (data) {
   let postConditionAddress = data.recipient
-  let amount = new BigNum(utils.toOnChainAmount(data.mintPrice + 0.001))
+  let amount = new BigNum(toOnChainAmount(data.price + 0.001))
   if (data.batchOption > 1) {
-    amount = new BigNum(utils.toOnChainAmount((data.mintPrice * data.batchOption + 0.001)))
+    amount = new BigNum(toOnChainAmount((data.price * data.batchOption + 0.001)))
   }
   const standardFungiblePostCondition = makeStandardSTXPostCondition(postConditionAddress, FungibleConditionCode.Less, amount)
   const postConds = [standardFungiblePostCondition]
@@ -109,7 +132,7 @@ const getSTXMintPostConds = function (rootGetters, data) {
 const getGFTMintPostConds = function (data) {
   let postConditionAddress = data.recipient
   const postConditionCode = FungibleConditionCode.LessEqual
-  const postConditionAmount = new BigNum(utils.toOnChainAmount((data.mintPrice * data.batchOption + 0.001), data.sipTenToken.decimals))
+  const postConditionAmount = new BigNum(toOnChainAmount((data.price * data.batchOption + 0.001), data.sipTenToken.decimals))
   const fungibleAssetInfo = createAssetInfo(data.sipTenToken.contractId.split('.')[0], data.sipTenToken.contractId.split('.')[1], data.sipTenToken.contractId.split('.')[1])
   const standardFungiblePostCondition = makeStandardFungiblePostCondition(postConditionAddress, postConditionCode, postConditionAmount, fungibleAssetInfo)
   const postConds = [standardFungiblePostCondition]
@@ -127,82 +150,98 @@ const fetchNonce = function () {
     })
   })
 }
-const checkOpenNodeApiKey = function (charge) {
-  const received = charge.hashed_order;
-  const calculated = crypto.createHmac('sha256', OPENNODE_API_KEY_SM).update(charge.id).digest('hex');
+const checkOpenNodeApiKey = function (data) {
+  const received = data.hashed_order;
+  const calculated = crypto.createHmac('sha256', OPENNODE_API_KEY_SM).update(data.paymentId).digest('hex');
   return (received === calculated)
 }
 
 const transferNFT = function (data) {
-  console.log('transfer nft: data=', data);
-  if (!checkOpenNodeApiKey(data)) throw new Error('Not called via open node!')
-  const nonFungibleAssetInfo = createAssetInfo(
-    data.contractId.split('.')[0],
-    data.contractId.split('.')[1],
-    (data.assetName) ? data.assetName : data.contractName.split('-')[0]
-  )
-  // Post-condition check failure on non-fungible asset ST1ESYCGJB5Z5NBHS39XPC70PGC14WAQK5XXNQYDW.thisisnumberone-v1::my-nft owned by STFJEDEQB1Y1CQ7F04CS62DCS5MXZVSNXXN413ZG: UInt(3) Sent
-  const standardNonFungiblePostCondition = makeStandardNonFungiblePostCondition(
-    data.owner, // postConditionAddress
-    NonFungibleConditionCode.DoesNotOwn,
-    nonFungibleAssetInfo, // contract and nft info
-    uintCV(data.nftIndex)
-  )
-  const txOptions = {
-    contractAddress: data.contractId.split('.')[0],
-    contractName: data.contractId.split('.')[1],
-    functionName: 'transfer',
-    functionArgs: [uintCV(data.nftIndex), standardPrincipalCV(data.owner), standardPrincipalCV(data.recipient)],
-    senderKey: PRIKEY,
-    network: networkToUse,
-    postConditions: [standardNonFungiblePostCondition],
-  };
-  makeContractCall(txOptions).then((transaction) => {
-    broadcast(transaction, data.owner, data.nftIndex).then((resp) => {
-      console.log('transferNFT: Tx broadcast');
-      resolve(resp)
-    }).catch((error) => {
-      console.log('Failed to broadcast transaction from: ' + PUBKEY);
-      reject(error)
+  return new Promise((resolve, reject) => {
+    if (!data.batchOption) data.batchOption = 1
+    console.log('transfer nft: data=', data);
+    if (!checkOpenNodeApiKey(data)) throw new Error('Not called via open node!')
+    const nonFungibleAssetInfo = createAssetInfo(
+      data.contractId.split('.')[0],
+      data.contractId.split('.')[1],
+      (data.assetName) ? data.assetName : data.contractName.split('-')[0]
+    )
+    // Post-condition check failure on non-fungible asset ST1ESYCGJB5Z5NBHS39XPC70PGC14WAQK5XXNQYDW.thisisnumberone-v1::my-nft owned by STFJEDEQB1Y1CQ7F04CS62DCS5MXZVSNXXN413ZG: UInt(3) Sent
+    const standardNonFungiblePostCondition = makeStandardNonFungiblePostCondition(
+      data.owner, // postConditionAddress
+      NonFungibleConditionCode.DoesNotOwn,
+      nonFungibleAssetInfo, // contract and nft info
+      uintCV(data.nftIndex)
+    )
+    const txOptions = {
+      contractAddress: data.contractId.split('.')[0],
+      contractName: data.contractId.split('.')[1],
+      fee: new BigNum(50000),
+      functionName: 'transfer',
+      functionArgs: [uintCV(data.nftIndex), standardPrincipalCV(data.owner), standardPrincipalCV(data.recipient)],
+      senderKey: PRIKEY,
+      network: networkToUse,
+      postConditions: [standardNonFungiblePostCondition],
+    };
+    makeContractCall(txOptions).then((transaction) => {
+      broadcastTransaction(transaction, networkToUse).then((response) => {
+        console.log('transferNFT: Tx broadcast', response);
+        resolve(response)
+      }).catch((error) => {
+        console.log('Failed to broadcast: ' + error);
+        reject(error)
+      })
+      /**
+      broadcast(transaction, data.owner, data.nftIndex).then((resp) => {
+        console.log('transferNFT: Tx broadcast');
+        resolve(resp)
+      }).catch((error) => {
+        console.log('Failed to broadcast transaction from: ' + PUBKEY);
+        resolve(error)
+      })
+      **/
     })
   })
 }
 const mintNFT = function (data) {
-  console.log('mint nft: data=', data);
-  if (!checkOpenNodeApiKey(data)) throw new Error('Not called via open node!')
-  const nonFungibleAssetInfo = createAssetInfo(
-    data.contractId.split('.')[0],
-    data.contractId.split('.')[1],
-    (data.assetName) ? data.assetName : data.contractName.split('-')[0]
-  )
-  // Post-condition check failure on non-fungible asset ST1ESYCGJB5Z5NBHS39XPC70PGC14WAQK5XXNQYDW.thisisnumberone-v1::my-nft owned by STFJEDEQB1Y1CQ7F04CS62DCS5MXZVSNXXN413ZG: UInt(3) Sent
-  const standardNonFungiblePostCondition = makeStandardNonFungiblePostCondition(
-    data.owner, // postConditionAddress
-    NonFungibleConditionCode.DoesNotOwn,
-    nonFungibleAssetInfo, // contract and nft info
-    uintCV(data.nftIndex)
-  )
-  const tender = contractPrincipalCV(data.tokenContractAddress, data.tokenContractName)
-  const localPCs = (data.tokenContractName === 'stx-token' || data.tokenContractName === 'unwrapped-stx-token') ? getSTXMintPostConds(rootGetters, data, false) : getGFTMintPostConds(data)
-  const txOptions = {
-    senderKey: PRIKEY,
-    network: networkToUse,
-    postConditionMode: (data.postConditionMode) ? data.postConditionMode : PostConditionMode.Deny,
-    postConditions: (data.postConditions) ? data.postConditions : localPCs,
-    contractAddress: data.contractId.split('.')[0],
-    contractName: data.contractId.split('.')[1],
-    functionName: (data.batchOption === 1) ? 'mint-with' : 'mint-with-many',
-    functionArgs: (data.batchOption === 1) ? [tender] : [uintCV(data.batchOption), tender]
-  }
+  return new Promise((resolve, reject) => {
+    if (!data.batchOption) data.batchOption = 1
+    console.log('mint nft: data=', data);
+    if (!checkOpenNodeApiKey(data)) throw new Error('Not called via open node!')
+    // const tender = contractPrincipalCV(data.tokenContractAddress, data.tokenContractName)
+    const localPCs = [] // (data.tokenContractName === 'unwrapped-stx-token') ? getSTXMintPostConds(data) : getGFTMintPostConds(data)
+    const txOptions = {
+      senderKey: PRIKEY,
+      network: networkToUse,
+      fee: new BigNum(5000),
+      postConditionMode: (data.postConditionMode) ? data.postConditionMode : PostConditionMode.Deny,
+      postConditions: (data.postConditions) ? data.postConditions : localPCs,
+      contractAddress: data.contractId.split('.')[0],
+      contractName: data.contractId.split('.')[1],
+      functionName: (data.batchOption === 1) ? 'admin-mint' : 'admin-mint-many',
+      functionArgs: (data.batchOption === 1) ? [standardPrincipalCV(data.recipient)] : [uintcv(data.batchOption), standardPrincipalCV(data.recipient)]
+      // functionName: (data.batchOption === 1) ? 'mint-with' : 'mint-with-many',
+      // functionArgs: (data.batchOption === 1) ? [tender] : [uintCV(data.batchOption), tender]
+    }
 
 
-  makeContractCall(txOptions).then((transaction) => {
-    broadcast(transaction, data.owner, data.nftIndex).then((resp) => {
-      console.log('transferNFT: Tx broadcast');
-      resolve(resp)
-    }).catch((error) => {
-      console.log('Failed to broadcast transaction from: ' + PUBKEY);
-      reject(error)
+    makeContractCall(txOptions).then((transaction) => {
+      broadcastTransaction(transaction, networkToUse).then((response) => {
+        console.log('mintNFT: Tx broadcast', response);
+        resolve(response)
+      }).catch((error) => {
+        console.log('Failed to broadcast transaction: ' + error);
+        reject(error)
+      })
+      /**
+      broadcast(transaction, data.owner, data.nftIndex).then((resp) => {
+        console.log('mintNFT: Tx broadcast');
+        resolve(resp)
+      }).catch((error) => {
+        console.log('Failed to broadcast transaction from: ' + PUBKEY);
+        resolve(error)
+      })
+      **/
     })
   })
 }
@@ -261,6 +300,8 @@ function runAsyncWrapper (callback) {
 
 // App
 const app = express();
+app.use(express.json())
+
 app.get('/', (req, res) => {
   res.send('hi there...');
 });
