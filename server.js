@@ -9,7 +9,8 @@ const {
 const {
   uintCV,
   standardPrincipalCV,
-  contractPrincipalCV,
+  listCV,
+  tupleCV,
   getNonce,
   makeSTXTokenTransfer,
   intToHexString,
@@ -59,6 +60,18 @@ const toOnChainAmount = function (amount, gftPrecision) {
   } catch {
     return 0
   }
+}
+const getAdminMintManyArgs = function (data) {
+  const entryList = []
+  for (let i = 0; i < data.entries.length; i++) {
+    const entry = data.entries[i]
+    const tupCV = tupleCV({
+      account: standardPrincipalCV(entry.recipient),
+      limit: uintCV(entry.nftIndex)
+    })
+    entryList.push(tupCV)
+  }
+  return [listCV(entryList)]
 }
 
 const mysha256 = function (message) {
@@ -153,7 +166,13 @@ const fetchNonce = function () {
 const checkOpenNodeApiKey = function (data) {
   const received = data.hashed_order;
   const calculated = crypto.createHmac('sha256', OPENNODE_API_KEY_SM).update(data.paymentId).digest('hex');
-  return (received === calculated)
+  if (received !== calculated) {
+    console.log('checkOpenNodeApiKey: received=' + received);
+    console.log('checkOpenNodeApiKey: calculated=' + calculated);
+    console.log('checkOpenNodeApiKey: paymentId=' + paymentId);
+    return false
+  }
+  return true
 }
 
 const transferNFT = function (data) {
@@ -191,15 +210,6 @@ const transferNFT = function (data) {
         console.log('Failed to broadcast: ' + error);
         reject(error)
       })
-      /**
-      broadcast(transaction, data.owner, data.nftIndex).then((resp) => {
-        console.log('transferNFT: Tx broadcast');
-        resolve(resp)
-      }).catch((error) => {
-        console.log('Failed to broadcast transaction from: ' + PUBKEY);
-        resolve(error)
-      })
-      **/
     })
   })
 }
@@ -218,13 +228,9 @@ const mintNFT = function (data) {
       postConditions: (data.postConditions) ? data.postConditions : localPCs,
       contractAddress: data.contractId.split('.')[0],
       contractName: data.contractId.split('.')[1],
-      functionName: (data.batchOption === 1) ? 'admin-mint' : 'admin-mint-many',
-      functionArgs: (data.batchOption === 1) ? [standardPrincipalCV(data.recipient)] : [uintcv(data.batchOption), standardPrincipalCV(data.recipient)]
-      // functionName: (data.batchOption === 1) ? 'mint-with' : 'mint-with-many',
-      // functionArgs: (data.batchOption === 1) ? [tender] : [uintCV(data.batchOption), tender]
+      functionName: (data.batchOption === 1) ? 'mint-with' : 'mint-with-many',
+      functionArgs: (data.batchOption === 1) ? [tender] : [uintCV(data.batchOption), tender]
     }
-
-
     makeContractCall(txOptions).then((transaction) => {
       broadcastTransaction(transaction, networkToUse).then((response) => {
         console.log('mintNFT: Tx broadcast', response);
@@ -233,15 +239,39 @@ const mintNFT = function (data) {
         console.log('Failed to broadcast transaction: ' + error);
         reject(error)
       })
-      /**
-      broadcast(transaction, data.owner, data.nftIndex).then((resp) => {
-        console.log('mintNFT: Tx broadcast');
-        resolve(resp)
+    })
+  })
+}
+const adminMintNFT = function (data) {
+  return new Promise((resolve, reject) => {
+    if (!data.batchOption) data.batchOption = 1
+    console.log('admin mint nft: data=', data);
+    if (!checkOpenNodeApiKey(data)) throw new Error('Not called via open node!')
+    // const tender = contractPrincipalCV(data.tokenContractAddress, data.tokenContractName)
+    const localPCs = [] // (data.tokenContractName === 'unwrapped-stx-token') ? getSTXMintPostConds(data) : getGFTMintPostConds(data)
+    const txOptions = {
+      senderKey: PRIKEY,
+      network: networkToUse,
+      fee: new BigNum(5000),
+      postConditionMode: (data.postConditionMode) ? data.postConditionMode : PostConditionMode.Deny,
+      postConditions: (data.postConditions) ? data.postConditions : localPCs,
+      contractAddress: data.contractId.split('.')[0],
+      contractName: data.contractId.split('.')[1],
+      functionName: (data.batchOption === 1) ? 'admin-mint' : 'admin-mint-many'
+    }
+    if (data.batchOption === 1) {
+      txOptions.functionArgs = [standardPrincipalCV(data.recipient), uintCV(data.nftIndex)]
+    } else {
+      txOptions.functionArgs = getAdminMintManyArgs(data)
+    }
+    makeContractCall(txOptions).then((transaction) => {
+      broadcastTransaction(transaction, networkToUse).then((response) => {
+        console.log('mintNFT: Tx broadcast', response);
+        resolve(response)
       }).catch((error) => {
-        console.log('Failed to broadcast transaction from: ' + PUBKEY);
-        resolve(error)
+        console.log('Failed to broadcast transaction: ' + error);
+        reject(error)
       })
-      **/
     })
   })
 }
@@ -324,6 +354,11 @@ app.post('/stacksmate/transfer-nft', runAsyncWrapper(async(req, res) => {
 
 app.post('/stacksmate/mint-nft', runAsyncWrapper(async(req, res) => {
   const transfer = await mintNFT(req.body)
+  res.send(transfer);
+}))
+
+app.post('/stacksmate/admin-mint-nft', runAsyncWrapper(async(req, res) => {
+  const transfer = await adminMintNFT(req.body)
   res.send(transfer);
 }))
 
