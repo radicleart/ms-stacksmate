@@ -74,6 +74,20 @@ const getAdminMintManyArgs = function (data) {
   return [listCV(entryList)]
 }
 
+const getAdminMintManySfts = function (data) {
+  const entryList = []
+  for (let i = 0; i < data.entries.length; i++) {
+    const entry = data.entries[i]
+    const tupCV = tupleCV({
+      nftIndex: uintCV(entry.nftIndex),
+      amount: uintCV(entry.amount),
+      recipient: standardPrincipalCV(entry.recipient)
+    })
+    entryList.push(tupCV)
+  }
+  return [listCV(entryList)]
+}
+
 const mysha256 = function (message) {
   let encoded
   if (typeof message === 'string') {
@@ -275,6 +289,38 @@ const adminMintNFT = function (data) {
     })
   })
 }
+const adminMintSFT = function (data) {
+  return new Promise((resolve, reject) => {
+    if (!data.batchOption) data.batchOption = 1
+    console.log('admin mint sft: data=', data);
+    if (!checkOpenNodeApiKey(data)) throw new Error('Not called via open node!')
+    const localPCs = []
+    const txOptions = {
+      senderKey: PRIKEY,
+      network: networkToUse,
+      fee: new BigNum(5000),
+      postConditionMode: (data.postConditionMode) ? data.postConditionMode : PostConditionMode.Deny,
+      postConditions: (data.postConditions) ? data.postConditions : localPCs,
+      contractAddress: data.contractId.split('.')[0],
+      contractName: data.contractId.split('.')[1],
+      functionName: (data.batchOption === 1) ? 'admin-mint' : 'admin-mint-many'
+    }
+    if (data.batchOption === 1) {
+      txOptions.functionArgs = [uintCV(data.nftIndex), uintCV(data.amount), standardPrincipalCV(data.recipient)]
+    } else {
+      txOptions.functionArgs = getAdminMintManySfts(data)
+    }
+    makeContractCall(txOptions).then((transaction) => {
+      broadcastTransaction(transaction, networkToUse).then((response) => {
+        console.log('mintSFT: Tx broadcast', response);
+        resolve(response)
+      }).catch((error) => {
+        console.log('Failed to broadcast transaction: ' + error);
+        reject(error)
+      })
+    })
+  })
+}
 const makeStacksTransfer = function (recipient, microstx, txNonce) {
   return new Promise((resolve, reject) => {
     const amountBN = new BigNum(microstx)
@@ -359,6 +405,11 @@ app.post('/stacksmate/mint-nft', runAsyncWrapper(async(req, res) => {
 
 app.post('/stacksmate/admin-mint-nft', runAsyncWrapper(async(req, res) => {
   const transfer = await adminMintNFT(req.body)
+  res.send(transfer);
+}))
+
+app.post('/stacksmate/admin-mint-sft', runAsyncWrapper(async(req, res) => {
+  const transfer = await adminMintSFT(req.body)
   res.send(transfer);
 }))
 
