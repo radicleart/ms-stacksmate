@@ -9,6 +9,10 @@ const {
 const {
   uintCV,
   standardPrincipalCV,
+  contractPrincipalCV,
+  serializeCV,
+  deserializeCV,
+  cvToJSON,
   listCV,
   tupleCV,
   getNonce,
@@ -380,6 +384,41 @@ app.use(express.json())
 
 app.get('/', (req, res) => {
   res.send('hi there...');
+});
+
+app.get('/stacksmate/extension-data/:address/:name', (req, res) => {
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const contractCV = contractPrincipalCV(req.params.address, req.params.name)
+  const contractCVS = serializeCV(contractCV)
+  const contractCVSH = contractCVS.toString('hex')
+  console.log(ip); // ip address of the user
+  if (ip.indexOf(ALLOWED_IP) > -1) {
+    res.send(contractCVSH);
+  } else {
+    res.sendStatus(401);
+  }
+});
+app.get('/stacksmate/proposal-data/:address/:name', (req, res) => {
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const contractCV = contractPrincipalCV(req.params.address, req.params.name)
+  const contractCVS = serializeCV(contractCV)
+  const contractCVSH = contractCVS.toString('hex')
+  console.log(ip); // ip address of the user
+  if (ip.indexOf(ALLOWED_IP) > -1) {
+    res.send(contractCVSH);
+  } else {
+    res.sendStatus(401);
+  }
+});
+app.get('/stacksmate/to-json/:result', (req, res) => {
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const result = cvToJSON(deserializeCV(req.params.result))
+  console.log(ip); // ip address of the user
+  if (ip.indexOf(ALLOWED_IP) > -1) {
+    res.send(result);
+  } else {
+    res.sendStatus(401);
+  }
 });
 
 app.get('/stacksmate/signme/:assetHash', (req, res) => {
